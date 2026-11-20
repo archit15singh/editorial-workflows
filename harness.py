@@ -163,7 +163,7 @@ def check_live(origin, pages, digests):
 
     def fetch(path):
         request = Request(origin + path + "?" + stamp,
-                          headers={"Cache-Control": "no-cache", "User-Agent": "engineering-blog-harness"})
+                          headers={"Cache-Control": "no-cache", "User-Agent": "editorial-workflows"})
         with urlopen(request, timeout=20) as response:
             require(urlsplit(response.url)[:3] == (base.scheme, base.netloc, path),
                     f"unexpected redirect for {path}: {response.url}")
