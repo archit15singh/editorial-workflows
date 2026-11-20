@@ -1,0 +1,116 @@
+{
+  "site": "https://archit15singh.github.io",
+  "count": 3,
+  "posts": [
+    {
+      "path": "/posts/2026-11-20-agent-benchmarks-need-resource-budgets/",
+      "title": "An agent benchmark needs a resource budget",
+      "sources": [
+        "https://www.anthropic.com/research/infrastructure-noise",
+        "https://www.tbench.ai/news/announcement-2-0"
+      ],
+      "claims": [
+        {
+          "type": "reported",
+          "claim": "Terminal-Bench 2.0 infrastructure errors at 1×, 3×, and uncapped were 5.8%, 2.1%, and 0.5%. Task success rose six points from strict to uncapped.",
+          "basis": "https://www.anthropic.com/research/infrastructure-noise",
+          "limit": "Anthropic's controlled resource sweep; the magnitude does not generalize across all agent evals."
+        },
+        {
+          "type": "derived",
+          "claim": "Strict to 3× lowered infra errors by 3.7 percentage points.",
+          "basis": "5.8% minus 2.1% from Anthropic's experiment.",
+          "limit": "Difference of reported rounded values."
+        }
+      ],
+      "figures": [
+        {
+          "path": "/downloads/software-reliability/benchmark-headroom.webp",
+          "class": "series-figure"
+        }
+      ],
+      "artifacts": [
+        "/downloads/software-reliability/experiment.py"
+      ],
+      "cover": "/images/uploads/agent-resource-budget.webp"
+    },
+    {
+      "path": "/posts/2026-11-20-canaries-need-a-sample-budget/",
+      "title": "A canary needs enough traffic to fail",
+      "sources": [
+        "https://sre.google/workbook/canarying-releases/",
+        "https://blog.cloudflare.com/18-november-2025-outage/",
+        "https://blog.cloudflare.com/code-orange-fail-small-complete/"
+      ],
+      "claims": [
+        {
+          "type": "scenario",
+          "claim": "5% of traffic failing 20% of the time gives a 1% fleet error rate.",
+          "basis": "Google SRE workbook example; clean control and proportional traffic exposure.",
+          "limit": "Teaching inputs, not incident telemetry."
+        },
+        {
+          "type": "reported",
+          "claim": "Cloudflare's main impact was mitigated at 14:30 UTC; all operations were restored at 17:06 UTC.",
+          "basis": "https://blog.cloudflare.com/18-november-2025-outage/",
+          "limit": "Two separate milestones in the company incident timeline."
+        },
+        {
+          "type": "scenario",
+          "claim": "One-in-10,000 and one-in-1,000 failure probabilities need 29,956 and 2,995 requests for 95% detection.",
+          "basis": "ceil(log(0.05) / log(1-p)), reproduced by experiment.py.",
+          "limit": "IID canary traffic and perfect event detection; correlation, cohort skew and noisy metrics can change sample requirements."
+        }
+      ],
+      "figures": [
+        {
+          "path": "/downloads/software-reliability/canary-sample-size.webp",
+          "class": "series-figure"
+        }
+      ],
+      "artifacts": [
+        "/downloads/software-reliability/experiment.py"
+      ],
+      "cover": "/images/uploads/canary-exposure.webp"
+    },
+    {
+      "path": "/posts/2026-11-20-online-migration-rollback-expires/",
+      "title": "An online migration can quietly lose its rollback",
+      "sources": [
+        "https://stripe.com/blog/online-migrations",
+        "https://aws.amazon.com/builders-library/ensuring-rollback-safety-during-deployments/",
+        "https://github.blog/news-insights/company-news/github-availability-report-may-2026/"
+      ],
+      "claims": [
+        {
+          "type": "reported",
+          "claim": "Stripe's source system had hundreds of millions of subscription objects and used a staged migration.",
+          "basis": "https://stripe.com/blog/online-migrations",
+          "limit": "Order and scale of the reported migration, without assuming downtime or throughput."
+        },
+        {
+          "type": "reported",
+          "claim": "GitHub's May 4 incident reported about 1.3% peak and 0.46% average 5xx requests.",
+          "basis": "https://github.blog/news-insights/company-news/github-availability-report-may-2026/",
+          "limit": "Customer request error rates during the incident; the report does not identify the specific migration tool."
+        },
+        {
+          "type": "scenario",
+          "claim": "At read cutover both stores hold revision 2; after a new-only write a restored old reader still sees 2.",
+          "basis": "One-record scenario reproduced by experiment.py.",
+          "limit": "Assumes no reverse replication or replay before rollback."
+        }
+      ],
+      "figures": [
+        {
+          "path": "/downloads/software-reliability/migration-revisions.webp",
+          "class": "series-figure"
+        }
+      ],
+      "artifacts": [
+        "/downloads/software-reliability/experiment.py"
+      ],
+      "cover": "/images/uploads/migration-rollback.webp"
+    }
+  ]
+}

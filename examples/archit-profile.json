@@ -1,0 +1,15 @@
+{
+  "author": "Archit Singh",
+  "profile": "https://archit15singh.github.io/about/",
+  "writing": "https://archit15singh.github.io/archives/",
+  "site": "https://archit15singh.github.io",
+  "repository": "archit15singh/archit15singh.github.io",
+  "areas": ["agent evaluation and runtime reliability", "release engineering", "data and state correctness", "engineering constraints and decision-making"],
+  "source_leads": [
+    "https://www.anthropic.com/engineering",
+    "https://github.blog/engineering/",
+    "https://stripe.com/blog/engineering",
+    "https://aws.amazon.com/builders-library/",
+    "https://sre.google/workbook/table-of-contents/"
+  ]
+}
