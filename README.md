@@ -10,12 +10,20 @@ python3 harness.py goal examples/archit-profile.json --count 3
 
 Copy the generated goal into a goal-capable agent session rooted here or provide it to your editor. Add `--publish` for a batch with explicit permission to push and merge on the target blog. The CLI prints the prompt. The agent works through [the editorial run](WORKFLOW.md). The original [harness creation goal](prompts/build-harness.md) is also reusable.
 
-For a Hugo site and the recorded first batch:
+With a signed-in Codex CLI, you can also hand off a local batch from the harness checkout. Use a dedicated writable directory containing the blog checkout and room for its linked worktree. The agent needs primary-source web access for the research step.
 
 ```sh
-hugo --source /path/to/blog --gc --minify --destination /tmp/blog-verification
-python3 harness.py verify examples/first-batch.json /tmp/blog-verification
-python3 harness.py verify examples/first-batch.json /tmp/blog-verification --live https://archit15singh.github.io
+python3 harness.py goal examples/archit-profile.json --count 3 \
+  | codex exec --sandbox workspace-write --add-dir /path/to/blog-workspace -
+```
+
+To verify the recorded batch, point Hugo at a checkout of the published blog tree and build into a fresh directory.
+
+```sh
+output=$(mktemp -d)
+hugo --source /path/to/blog --gc --minify --destination "$output"
+python3 harness.py verify examples/first-batch.json "$output"
+python3 harness.py verify examples/first-batch.json "$output" --live https://archit15singh.github.io
 python3 -m unittest discover -s tests
 ```
 
