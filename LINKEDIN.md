@@ -7,7 +7,7 @@ The blog harness keeps a private campaign ledger for an account, a series of dai
 1. Review the owner's strategy. Pick a narrow editorial hypothesis, and tie each draft to a public artifact or evidence. Distinguish measured results from examples. Check every source and show the owner the exact text, destination and proposed time.
 2. Initialize from a campaign JSON with `id`, a LinkedIn member-profile URL in `account`, an IANA `timezone`, and ordered `posts` with consecutive local dates. Use [the synthetic example](examples/linkedin-campaign.json) as the template. Set `DB` to a new SQLite file under a private directory.
 3. Record the exact batch fingerprint and approval reference only after the owner approves. The fingerprint covers every post and its slot, content and destination. A different draft batch gets a new campaign ID and fresh approval.
-4. The report exposes the exact copy and post fingerprint when a slot is ready. Use a connected, authorized scheduler or [LinkedIn's native scheduler](https://www.linkedin.com/help/linkedin/answer/a1347212). Check the account and existing queue before submission. Read back the copy and timestamp afterward. Record a receipt only for a verified row. A past scheduled slot without a publication receipt goes to reconciliation.
+4. The report exposes the exact copy and post fingerprint when a slot is ready. Use a connected, authorized scheduler or [LinkedIn's native scheduler](https://www.linkedin.com/help/linkedin/answer/a1347212). Check the account and existing queue before submission. Read back the saved rows by hook and timestamp afterward. A cached queue badge can lag the list. If the calendar labels are inconsistent, use the date field and confirm the displayed timestamp before submitting. Record a receipt only for a verified row. A past scheduled slot without a publication receipt goes to reconciliation.
 
 ```sh
 python3 linkedin.py --db "$DB" init /private/path/campaign.json
@@ -16,7 +16,7 @@ python3 linkedin.py --db "$DB" report campaign-id
 python3 linkedin.py --db "$DB" receipt campaign-id /private/path/receipt.json
 ```
 
-Receipt object fields are `post`, `state` (`scheduled` or `published`), report `fingerprint`, confirmed `account`, `provider`, stable `external_id`, `url`, event `at`, and `verified_at`. Use offset-aware timestamps. For a published post, use its LinkedIn permalink. Re-importing an identical receipt is safe. The ledger records operator or provider evidence. It cannot verify an external receipt by itself.
+Receipt object fields are `post`, `state` (`scheduled` or `published`), report `fingerprint`, confirmed `account`, `provider`, stable `external_id`, `url`, event `at`, and `verified_at`. Use offset-aware timestamps. For a published post, use its LinkedIn permalink and identifier. When the native schedule omits a row ID, use an explicitly labeled local key derived from the confirmed profile, timestamp, and fingerprint. Keep the readback evidence with the receipt. Re-importing an identical receipt is safe. The ledger records operator or provider evidence. It cannot verify an external receipt by itself.
 
 ## Comment review
 
