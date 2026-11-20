@@ -16,7 +16,20 @@ python3 linkedin.py --db "$DB" report campaign-id
 python3 linkedin.py --db "$DB" receipt campaign-id /private/path/receipt.json
 ```
 
-Receipt object fields are `post`, `state` (`scheduled` or `published`), report `fingerprint`, confirmed `account`, `provider`, stable `external_id`, `url`, event `at`, and `verified_at`. Use offset-aware timestamps. For a published post, use its LinkedIn permalink and identifier. When the native schedule omits a row ID, use an explicitly labeled local key derived from the confirmed profile, timestamp, and fingerprint. Keep the readback evidence with the receipt. Re-importing an identical receipt is safe. The ledger records operator or provider evidence. It cannot verify an external receipt by itself.
+For initial scheduling and publication, receipt fields are `post`, `state` (`scheduled` or `published`), report `fingerprint`, confirmed `account`, `provider`, stable `external_id`, `url`, event `at`, and `verified_at`. Use offset-aware timestamps. For publication, use the post’s LinkedIn permalink and identifier. A feed URL with an activity, share, or UGC post ID or a `/posts/…-activity-…` permalink works. When the native schedule omits a row ID, use an explicitly labeled local key derived from the confirmed profile, timestamp, and fingerprint. Keep the readback evidence with the receipt. Re-importing an identical receipt is safe. The ledger records operator or provider evidence. It cannot verify an external receipt by itself.
+
+## Record a cancellation or reschedule
+
+Use the same `receipt` command after verifying the change in the scheduler. Set `state` to `cancelled` or `rescheduled`, keep the original post `fingerprint` and account, and include the current `schedule_revision` from the report as `previous`. Put the confirmed readback reference in `evidence` and its timestamp in `verified_at`.
+
+- For a cancellation, use the active schedule’s provider, `external_id`, and slot as `at`.
+- For a reschedule, use the replacement row’s provider, `external_id`, and new slot as `at`. Obtain fresh owner approval for that exact post and time before changing the scheduler. Put the owner’s approval reference in `approval_evidence` and the hash below in `revised_fingerprint`. Use the same timestamp string in the hash command and the receipt.
+
+```sh
+python3 linkedin.py --db "$DB" reschedule-fingerprint campaign-id post-id 2030-01-03T18:30:00+05:30
+```
+
+The report retains the original slot in `approved_slot` and the subsequent receipts in `schedule_changes`. The current `slot` and `scheduled` receipt drive publication reconciliation. Cancelled rows have no active schedule.
 
 ## Comment review
 
@@ -29,7 +42,7 @@ python3 linkedin.py --db "$DB" reply-close campaign-id /private/path/disposition
 
 ## Analytics and strategy
 
-On each daily check, reconcile due publications and replies. Capture verified individual-post analytics near 24 hours and 7 days from actual publication. The intake windows are 24–36 hours and 7–8 days. Late snapshots are retained but do not fill missed comparison windows. Use one provider per comparison. Preserve inaccessible values as null and differentiate a measured zero from missing evidence. Snapshot fields are `post`, `provider`, `observed_at`, `evidence` and `metrics`. Recognized metrics appear in `linkedin.py`. Count a substantive comment when it contributes a counterexample, concrete implementation detail, or answerable technical question. Attribute qualified inbound only when the connection to the post can be established.
+On each daily check, reconcile due publications and replies. Capture verified individual-post analytics near 24 hours and 7 days from actual publication. The intake windows are 24–36 hours and 7–8 days. Late snapshots are retained but do not fill missed comparison windows. Use one provider per comparison. For each post and metric, use the earliest known value in the window. The report’s `metric_sources` gives each value used, its timestamp, and its evidence. Preserve inaccessible values as null and differentiate a measured zero from missing evidence. Snapshot fields are `post`, `provider`, `observed_at`, `evidence` and `metrics`. Recognized metrics appear in `linkedin.py`. Count a substantive comment when it contributes a counterexample, concrete implementation detail, or answerable technical question. Attribute qualified inbound only when the connection to the post can be established.
 
 At the weekly review, compare matched-age results by format and angle. Read sample sizes per metric before drawing conclusions. Use substantive comments, saves and qualified inbound as primary measures. Reach and follower trend give context. If fewer than three comparable posts per angle have the primary metric, record `hold` and keep collecting. Otherwise record the evidence and choose one variable to test next. These small descriptive cohorts cannot establish causation. Keep outcome evidence in the ledger and use the existing [architecture loop](ARCHITECTURE.md) for repeated tooling friction.
 
