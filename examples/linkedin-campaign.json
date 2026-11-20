@@ -1,0 +1,17 @@
+{
+  "id": "campaign-id",
+  "timezone": "Asia/Kolkata",
+  "account": "https://www.linkedin.com/in/example-engineer",
+  "posts": [
+    {
+      "id": "example-post",
+      "slot": "2030-01-01T18:30:00+05:30",
+      "pillar": "release engineering",
+      "format": "text",
+      "angle": "worked example",
+      "text": "Example only. A successful build is one check in a deployment.",
+      "sources": ["https://example.com/public-artifact"],
+      "discussion": "Ask which production check would catch a partial release."
+    }
+  ]
+}

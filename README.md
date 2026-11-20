@@ -32,3 +32,5 @@ The verifier checks article count within the manifest, rendered titles and body,
 See the [first publication run](examples/first-run.md) for outcomes and the verifier change it prompted.
 
 Harness contributors and editorial agents use the [architecture improvement loop](ARCHITECTURE.md) after changes to code or CI and when an editorial run exposes a recurring workaround.
+
+The [LinkedIn campaign workflow](LINKEDIN.md) adds a private scheduling handoff, comment review queue, post analytics and weekly strategy decisions.
