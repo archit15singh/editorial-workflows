@@ -1,4 +1,4 @@
-name: Verifier tests
+name: Harness checks
 on: [push, pull_request]
 permissions:
   contents: read
@@ -7,7 +7,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - run: python3 -m unittest discover -s tests -v
+      - name: Check architecture review record
+        if: github.event_name == 'pull_request'
+        env:
+          REVIEW_BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/architecture_review.py --base "$REVIEW_BASE"

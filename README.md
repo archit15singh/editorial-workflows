@@ -30,3 +30,5 @@ python3 -m unittest discover -s tests
 The verifier checks article count within the manifest, rendered titles and body, cited links, figure alt text, and artifact links. Live checks also compare article text and asset bytes against the supplied build. The claim ledger is an editorial review input. A passing check proves that the expected content shipped and still leaves source interpretation to the editor.
 
 See the [first publication run](examples/first-run.md) for outcomes and the verifier change it prompted.
+
+Harness contributors and editorial agents use the [architecture improvement loop](ARCHITECTURE.md) after changes to code or CI and when an editorial run exposes a recurring workaround.

@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import json
 import re
-import sys
 import time
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
@@ -103,11 +102,84 @@ def built_path(output, path):
     return output / path.lstrip("/") / "index.html" if path.endswith("/") else output / path.lstrip("/")
 
 
-def check_batch(manifest, output, base_url=None):
+def check_claims(post, path):
+    sources = post["sources"]
+    require(len(set(sources)) >= 2, f"{path}: list at least two primary source URLs")
+    require(bool(post["claims"]), f"{path}: missing claim ledger")
+    for claim in post["claims"]:
+        require(claim["type"] in {"reported", "derived", "scenario"}
+                and all(claim[field].strip() for field in ("basis", "claim", "limit")),
+                f"{path}: claim has no classification or basis")
+        if claim["type"] == "reported":
+            require(claim["basis"] in sources, f"{path}: reported claim needs a listed source")
+
+
+def check_markup(article, post, path):
+    cover = site_path(post["cover"])
+    require(article.covers.get(cover), f"{path}: cover absent or missing alt text: {cover}")
+    for source in post["sources"]:
+        require(urlsplit(source).scheme == "https" and source in article.links,
+                f"{path}: primary source missing from article body: {source}")
+    require(bool(post["figures"]), f"{path}: missing figure")
+    figures = {}
+    for figure in post["figures"]:
+        route = site_path(figure["path"])
+        require(article.images.get(route), f"{path}: figure absent or missing alt text: {route}")
+        if css_class := figure.get("class"):
+            require(css_class in article.figure_classes[route],
+                    f"{path}: missing figure class {css_class}: {route}")
+        figures[route] = article.images[route]
+    require(bool(post["artifacts"]), f"{path}: missing reproducible artifact")
+    downloads = {site_path(artifact) for artifact in post["artifacts"]}
+    for route in sorted(downloads):
+        require(route in article.links, f"{path}: artifact link missing: {route}")
+    return {cover, *figures, *downloads}, article.covers[cover], figures
+
+
+def local_batch(manifest, output, origin):
     posts = manifest["posts"]
     require(len(posts) == manifest["count"] > 0, "manifest post count differs from batch size")
-    seen = set()
-    cache = {}
+    pages = {}
+    digests = {}
+    for post in posts:
+        path = site_path(post["path"], page=True)
+        require(path not in pages, f"duplicate post: {path}")
+        article = Article(built_path(output, path).read_bytes(), origin)
+        require(article.title == post["title"], f"{path}: wrong rendered title ({article.title})")
+        require(bool(article.text), f"{path}: missing article body")
+        check_claims(post, path)
+        assets, cover_alt, figure_alts = check_markup(article, post, path)
+        for route in sorted(assets - digests.keys()):
+            data = built_path(output, route).read_bytes()
+            require(bool(data), f"empty asset: {route}")
+            digests[route] = hashlib.sha256(data).digest()
+        pages[path] = (post, article, cover_alt, figure_alts, len(assets))
+    return pages, digests
+
+
+def check_live(origin, pages, digests):
+    base = urlsplit(origin)
+    stamp = urlencode({"verify": time.time_ns()})
+
+    def fetch(path):
+        request = Request(origin + path + "?" + stamp,
+                          headers={"Cache-Control": "no-cache", "User-Agent": "engineering-blog-harness"})
+        with urlopen(request, timeout=20) as response:
+            require(urlsplit(response.url)[:3] == (base.scheme, base.netloc, path),
+                    f"unexpected redirect for {path}: {response.url}")
+            return response.read()
+
+    for path, (post, expected, cover_alt, figure_alts, _) in pages.items():
+        actual = Article(fetch(path), origin)
+        require((actual.title, actual.text) == (expected.title, expected.text), f"{path}: live copy differs from build")
+        _, live_cover_alt, live_figure_alts = check_markup(actual, post, path)
+        require(live_cover_alt == cover_alt, f"{path}: live cover alt differs from build")
+        require(live_figure_alts == figure_alts, f"{path}: live alt text differs from build")
+    for route, digest in digests.items():
+        require(hashlib.sha256(fetch(route)).digest() == digest, f"{route}: live asset differs from build")
+
+
+def check_batch(manifest, output, base_url=None):
     origin = manifest["site"].rstrip("/")
     base = urlsplit(origin)
     require(base.scheme == "https" and base.netloc and not base.path
@@ -115,71 +187,11 @@ def check_batch(manifest, output, base_url=None):
             "manifest site must be an HTTPS origin")
     if base_url:
         require(base_url.rstrip("/") == origin, "live URL must match the manifest site")
-    stamp = urlencode({"verify": time.time_ns()})
-
-    def live(path):
-        if path not in cache:
-            request = Request(base_url.rstrip("/") + path + "?" + stamp,
-                              headers={"Cache-Control": "no-cache", "User-Agent": "engineering-blog-harness"})
-            with urlopen(request, timeout=20) as response:
-                require(urlsplit(response.url)[:3] == (base.scheme, base.netloc, path),
-                        f"unexpected redirect for {path}: {response.url}")
-                cache[path] = response.read()
-        return cache[path]
-
-    for post in posts:
-        path = site_path(post["path"], page=True)
-        require(path not in seen, f"duplicate post: {path}")
-        seen.add(path)
-        expected = Article(built_path(output, path).read_bytes(), origin)
-        require(expected.title == post["title"], f"{path}: wrong rendered title ({expected.title})")
-        require(bool(expected.text), f"{path}: missing article body")
-        require(len(set(post["sources"])) >= 2, f"{path}: list at least two primary source URLs")
-        assets = set()
-        for claim in post["claims"]:
-            require(claim["type"] in {"reported", "derived", "scenario"} and all(claim[field].strip() for field in ("basis", "claim", "limit")),
-                    f"{path}: claim has no classification or basis")
-            if claim["type"] == "reported":
-                require(claim["basis"] in post["sources"], f"{path}: reported claim needs a listed source")
-        require(bool(post["claims"]), f"{path}: missing claim ledger")
-
-        cover = site_path(post["cover"])
-
-        def check_markup(article):
-            require(article.covers.get(cover), f"{path}: cover absent or missing alt text: {cover}")
-            assets.add(cover)
-            for source in post["sources"]:
-                require(urlsplit(source).scheme == "https" and source in article.links,
-                        f"{path}: primary source missing from article body: {source}")
-            require(bool(post["figures"]), f"{path}: missing figure")
-            for figure in post["figures"]:
-                route = site_path(figure["path"])
-                require(article.images.get(route), f"{path}: figure absent or missing alt text: {route}")
-                if css_class := figure.get("class"):
-                    require(css_class in article.figure_classes[route],
-                            f"{path}: missing figure class {css_class}: {route}")
-                assets.add(route)
-            for artifact in post["artifacts"]:
-                route = site_path(artifact)
-                require(route in article.links, f"{path}: artifact link missing: {route}")
-                assets.add(route)
-            require(bool(post["artifacts"]), f"{path}: missing reproducible artifact")
-
-        check_markup(expected)
-        if base_url:
-            actual = Article(live(path), origin)
-            require((actual.title, actual.text) == (expected.title, expected.text), f"{path}: live copy differs from build")
-            check_markup(actual)
-            require(actual.covers[cover] == expected.covers[cover], f"{path}: live cover alt differs from build")
-            require(all(actual.images[route] == expected.images[route] for route in
-                        (figure["path"] for figure in post["figures"])), f"{path}: live alt text differs from build")
-        for route in sorted(assets):
-            data = built_path(output, route).read_bytes()
-            require(bool(data), f"empty asset: {route}")
-            if base_url:
-                require(hashlib.sha256(data).digest() == hashlib.sha256(live(route)).digest(),
-                        f"{route}: live asset differs from build")
-        print(f"PASS {path} ({len(assets)} assets)")
+    pages, digests = local_batch(manifest, output, origin)
+    if base_url:
+        check_live(origin, pages, digests)
+    for path, (_, _, _, _, count) in pages.items():
+        print(f"PASS {path} ({count} assets)")
 
 
 def goal(profile, count, publish):

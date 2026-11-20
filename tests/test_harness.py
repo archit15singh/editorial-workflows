@@ -1,4 +1,5 @@
 import io
+from copy import deepcopy
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,6 +62,16 @@ class HarnessTests(unittest.TestCase):
         check_batch(MANIFEST, self.output)
         with patch("harness.urlopen", self.live_response):
             check_batch(MANIFEST, self.output, SITE)
+
+    def test_incomplete_local_batch_does_not_request_live_pages(self):
+        batch = deepcopy(MANIFEST)
+        missing = {**batch["posts"][0], "path": "/posts/missing/"}
+        batch["posts"].append(missing)
+        batch["count"] = 2
+        with patch("harness.urlopen", side_effect=self.live_response) as fetch:
+            with self.assertRaises(FileNotFoundError):
+                check_batch(batch, self.output, SITE)
+        fetch.assert_not_called()
 
     def test_rejects_external_cover_with_identical_path(self):
         page = self.output / POST.lstrip("/") / "index.html"
