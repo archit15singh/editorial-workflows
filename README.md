@@ -1,16 +1,20 @@
-# Engineering Blog Harness
+# Editorial Workflows
 
-A bounded workflow for turning first-party engineering reports into original posts. A writing agent researches and edits each piece. The CLI generates a scoped goal and checks Hugo output locally and after deployment.
+Tools for verifying Hugo posts and tracking LinkedIn schedules, approvals, and results.
 
-Use Python 3.10+, Git, and Hugo. For GitHub delivery, use an authenticated GitHub CLI or the destination repository's equivalent release process.
+Use Python 3.10 or newer. The blog workflow also uses Git and Hugo, plus the destination repository’s release process.
+
+## Blog publishing
+
+Generate a goal for a research and writing agent, then verify the rendered posts and assets before and after deployment. Start with [the editorial workflow](WORKFLOW.md).
 
 ```sh
 python3 harness.py goal examples/archit-profile.json --count 3
 ```
 
-Copy the generated goal into a goal-capable agent session rooted here or provide it to your editor. Add `--publish` for a batch with explicit permission to push and merge on the target blog. The CLI prints the prompt. The agent works through [the editorial run](WORKFLOW.md). The original [harness creation goal](prompts/build-harness.md) is also reusable.
+Copy the generated goal into a goal-capable agent session rooted here or provide it to your editor. Add `--publish` for a batch with explicit permission to push and merge on the target blog. The CLI prints the prompt. The agent works through [the editorial run](WORKFLOW.md).
 
-With a signed-in Codex CLI, you can also hand off a local batch from the harness checkout. Use a dedicated writable directory containing the blog checkout and room for its linked worktree. The agent needs primary-source web access for the research step.
+With a signed-in Codex CLI, you can also hand off a local batch from this checkout. Use a dedicated writable directory containing the blog checkout and room for its linked worktree. The agent needs primary-source web access for the research step.
 
 ```sh
 python3 harness.py goal examples/archit-profile.json --count 3 \
@@ -31,6 +35,12 @@ The verifier checks article count within the manifest, rendered titles and body,
 
 See the [first publication run](examples/first-run.md) for outcomes and the verifier change it prompted.
 
-Harness contributors and editorial agents use the [architecture improvement loop](ARCHITECTURE.md) after changes to code or CI and when an editorial run exposes a recurring workaround.
+## LinkedIn tracking
 
-The [LinkedIn campaign workflow](LINKEDIN.md) adds a private scheduling handoff, comment review queue, post analytics and weekly strategy decisions.
+Record approval for exact post copy and times, then schedule in LinkedIn or with an authorized scheduler. Use the private SQLite tracker for schedule confirmation, publication receipts, comment drafts for manual review, and post analytics.
+
+See [the LinkedIn workflow](LINKEDIN.md) for setup, daily checks, and weekly review.
+
+## Contributing
+
+Use the [architecture improvement loop](ARCHITECTURE.md) for changes to code or CI and when an editorial run exposes a recurring workaround. The original [project build prompt](prompts/build-harness.md) is available for reuse.

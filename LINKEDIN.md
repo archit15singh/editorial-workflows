@@ -1,6 +1,6 @@
 # LinkedIn campaign workflow
 
-The blog harness keeps a private campaign ledger for an account, a series of daily posts, scheduling receipts, comment drafts and measured results. Use the operator's private source of editorial policy and existing approvals. Keep draft copy, account settings, Notion content, individual engagement and performance metrics outside this public checkout.
+The LinkedIn tracker keeps a private campaign ledger for a member profile, daily posts, scheduling receipts, comment drafts, and measured results. Use the operator's private source of editorial policy and existing approvals. Keep draft copy, account settings, Notion content, individual engagement and performance metrics outside this public checkout.
 
 ## Draft and schedule
 
