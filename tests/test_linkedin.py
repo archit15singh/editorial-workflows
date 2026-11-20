@@ -32,7 +32,7 @@ class CampaignTests(unittest.TestCase):
     def receipt(self, state):
         return {"post": KEY, "state": state, "fingerprint": linkedin.fingerprint(PLAN["posts"][0]),
                 "provider": "linkedin-native", "account": ACCOUNT, "external_id": "test-id",
-                "url": "https://www.linkedin.com/feed/update/example/",
+                "url": "https://www.linkedin.com/feed/update/urn:li:activity:1234567890/",
                 "at": BASE.isoformat(), "verified_at": min(NOW, BASE + timedelta(hours=1)).isoformat()}
 
     def test_approval_and_exact_destination_gate_schedule(self):
@@ -48,6 +48,87 @@ class CampaignTests(unittest.TestCase):
         linkedin.evidence_receipt(self.db, PLAN, receipt, NOW)
         linkedin.evidence_receipt(self.db, PLAN, receipt, NOW)
         self.assertEqual(linkedin.report(self.db, PLAN, NOW)["posts"][0]["status"], "reconcile-publication")
+
+    def test_cancel_and_reschedule_keep_approval_and_history(self):
+        self.approve()
+        schedule = self.receipt("scheduled")
+        linkedin.evidence_receipt(self.db, PLAN, schedule, NOW)
+        slot = (BASE + timedelta(days=2)).isoformat()
+        change = {**schedule, "state": "rescheduled", "at": slot,
+                  "verified_at": (BASE + timedelta(hours=2)).isoformat(),
+                  "previous": linkedin.fingerprint(schedule), "evidence": "Planner readback",
+                  "approval_evidence": "Owner approved this new time"}
+        with self.assertRaisesRegex(ValueError, "revised post fingerprint"):
+            linkedin.evidence_receipt(self.db, PLAN, change, NOW)
+        change["revised_fingerprint"] = linkedin.fingerprint({**PLAN["posts"][0], "slot": slot})
+        linkedin.evidence_receipt(self.db, PLAN, change, NOW)
+        row = linkedin.report(self.db, PLAN, BASE + timedelta(days=1))["posts"][0]
+        self.assertEqual((row["status"], row["slot"]), ("scheduled", slot))
+        self.assertEqual(row["schedule_revision"], linkedin.fingerprint(change))
+        cancelled = {**schedule, "state": "cancelled", "at": slot,
+                     "verified_at": (BASE + timedelta(hours=3)).isoformat(),
+                     "previous": linkedin.fingerprint(change), "evidence": "Removal confirmed"}
+        with self.assertRaisesRegex(ValueError, "current schedule revision"):
+            linkedin.evidence_receipt(self.db, PLAN, {**cancelled, "previous": change["previous"]}, NOW)
+        linkedin.evidence_receipt(self.db, PLAN, cancelled, NOW)
+        linkedin.evidence_receipt(self.db, PLAN, change, NOW)
+        linkedin.evidence_receipt(self.db, PLAN, cancelled, NOW)
+        row = linkedin.report(self.db, PLAN, NOW)["posts"][0]
+        self.assertEqual(row["status"], "cancelled")
+        self.assertIsNone(row["scheduled"])
+        self.assertEqual(row["schedule_changes"], [change, cancelled])
+        self.assertEqual(row["approved_slot"], PLAN["posts"][0]["slot"])
+        restored = {**change, "previous": linkedin.fingerprint(cancelled),
+                    "verified_at": (BASE + timedelta(hours=4)).isoformat()}
+        with self.assertRaisesRegex(ValueError, "verified after"):
+            linkedin.evidence_receipt(self.db, PLAN, {**restored, "verified_at": change["verified_at"]}, NOW)
+        linkedin.evidence_receipt(self.db, PLAN, restored, NOW)
+        self.assertEqual(linkedin.report(self.db, PLAN, NOW)["posts"][0]["status"], "reconcile-publication")
+        linkedin.evidence_receipt(self.db, PLAN, self.receipt("published"), NOW)
+        with self.assertRaisesRegex(ValueError, "no verified publication"):
+            linkedin.evidence_receipt(self.db, PLAN, {**cancelled, "previous": linkedin.fingerprint(restored)}, NOW)
+        self.assertEqual(linkedin.report(self.db, PLAN, NOW)["posts"][0]["status"], "published")
+
+    def test_publication_requires_a_permalink(self):
+        self.approve()
+        receipt = self.receipt("published")
+        for url in ("https://www.linkedin.com/", "https://www.linkedin.com/in/member/",
+                    "https://www.linkedin.com/feed/update/example/",
+                    "https://www.linkedin.com.evil.example/feed/update/urn:li:activity:123/"):
+            with self.subTest(url=url), self.assertRaisesRegex(ValueError, "LinkedIn post permalink"):
+                linkedin.evidence_receipt(self.db, PLAN, {**receipt, "url": url}, NOW)
+        for url in (receipt["url"], "https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A123/",
+                    "https://linkedin.com/feed/update/urn:li:share:123/",
+                    "https://www.linkedin.com/posts/alex_sample-activity-123456789-ABcd?trk=test"):
+            with self.subTest(url=url):
+                with self.db:
+                    linkedin.evidence_receipt(self.db, PLAN, {**receipt, "url": url}, NOW)
+                    self.db.execute("DELETE FROM receipts")
+
+    def test_comparisons_use_earliest_known_value_per_metric(self):
+        self.approve()
+        linkedin.evidence_receipt(self.db, PLAN, self.receipt("published"), NOW)
+        for hours, provider, impressions, saves in (
+            (24, "native", 200, None), (25, "native", 205, 7),
+            (26, "native", 210, 8), (37, "native", 225, 10),
+            (24, "other", 50, 0), (168, "native", 600, None),
+        ):
+            linkedin.record_snapshot(self.db, PLAN, {
+                "post": KEY, "provider": provider, "evidence": f"Observation at {hours} hours",
+                "observed_at": (BASE + timedelta(hours=hours)).isoformat(),
+                "metrics": {"impressions": impressions, "saves": saves},
+            }, NOW)
+        result = linkedin.report(self.db, PLAN, NOW)
+        cohort = {(row["window"], row["provider"]): row["metrics"] for row in result["comparisons"]}
+        self.assertEqual(cohort["24h", "native"]["impressions"], {"n": 1, "median": 200})
+        self.assertEqual(cohort["24h", "native"]["saves"], {"n": 1, "median": 7})
+        self.assertEqual(cohort["24h", "other"]["saves"], {"n": 1, "median": 0})
+        self.assertEqual(cohort["7d", "native"]["saves"], {"n": 0, "median": None})
+        sources = result["posts"][0]["checks"][0]["metric_sources"]["native"]
+        self.assertEqual(sources["saves"], {
+            "value": 7, "observed_at": (BASE + timedelta(hours=25)).isoformat(),
+            "evidence": "Observation at 25 hours",
+        })
 
     def test_only_comparable_observations_count_and_null_is_not_zero(self):
         self.approve()
@@ -83,6 +164,10 @@ class CampaignTests(unittest.TestCase):
                            check=True, capture_output=True)
             proc = subprocess.run([*cli, "report", PLAN["id"]], check=True, capture_output=True)
             self.assertFalse(json.loads(proc.stdout)["approved"])
+            slot = "2030-01-03T18:30:00+05:30"
+            revised = subprocess.run([*cli, "reschedule-fingerprint", PLAN["id"], KEY, slot],
+                                     check=True, capture_output=True, text=True)
+            self.assertEqual(revised.stdout.strip(), linkedin.fingerprint({**PLAN["posts"][0], "slot": slot}))
 
 
 if __name__ == "__main__":

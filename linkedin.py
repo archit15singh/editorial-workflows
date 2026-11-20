@@ -6,14 +6,26 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 from sqlite3 import IntegrityError, connect
 from statistics import median
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from zoneinfo import ZoneInfo
 
 METRICS = ("impressions", "reactions", "comments", "substantive_comments",
            "reposts", "saves", "qualified_inbound")
 WINDOWS = {"24h": (24, 12), "7d": (168, 24)}
+POST_PATH = re.compile(
+    r"/(?:feed/update/urn:li:(?:activity|ugcPost|share):[0-9]+"
+    r"|posts/[^/?#\s]+-activity-[0-9]+(?:-[A-Za-z0-9_-]+)?)/?"
+)
+SCHEDULE_CHANGE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schedule_changes (
+    campaign TEXT NOT NULL REFERENCES campaign(id), post TEXT NOT NULL,
+    verified TEXT NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY (campaign, post, verified)
+)
+"""
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS campaign (
     id TEXT PRIMARY KEY, payload TEXT NOT NULL
@@ -128,9 +140,55 @@ def load_campaign(db, campaign):
     return json.loads(row[0])
 
 
+def find_post(plan, post_id):
+    post = next((post for post in plan["posts"] if post["id"] == post_id), None)
+    if post is None:
+        raise ValueError(f"unknown campaign post: {post_id}")
+    return post
+
+
 def load_receipts(db, campaign):
     rows = db.execute("SELECT post, state, payload FROM receipts WHERE campaign = ?", (campaign,))
     return {(post, state): json.loads(payload) for post, state, payload in rows}
+
+
+def load_schedule_changes(db, campaign):
+    changes = defaultdict(list)
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schedule_changes'").fetchone():
+        for post, payload in db.execute(
+            "SELECT post, payload FROM schedule_changes WHERE campaign = ? ORDER BY verified", (campaign,)
+        ):
+            changes[post].append(json.loads(payload))
+    return changes
+
+
+def record_schedule_change(db, plan, post, item, receipts, recorded):
+    campaign, post_id = plan["id"], post["id"]
+    changes = load_schedule_changes(db, campaign)[post_id]
+    if item in changes:
+        return
+    current = changes[-1] if changes else receipts.get((post_id, "scheduled"))
+    if current is None or (post_id, "published") in receipts:
+        raise ValueError("schedule change requires an existing schedule and no verified publication")
+    if item.get("previous") != fingerprint(current):
+        raise ValueError("schedule change must reference the current schedule revision")
+    if recorded <= instant(current["verified_at"]):
+        raise ValueError("schedule change must be verified after the prior revision")
+    required(item["evidence"], "schedule change evidence")
+    if item["state"] == "cancelled":
+        if (current["state"] == "cancelled" or instant(item["at"]) != instant(current["at"])
+                or any(item[field] != current[field] for field in ("provider", "external_id"))):
+            raise ValueError("cancellation must match the active provider, receipt identifier and slot")
+    else:
+        if current["state"] != "cancelled" and instant(item["at"]) == instant(current["at"]):
+            raise ValueError("reschedule needs a different slot or a previously cancelled schedule")
+        if item.get("revised_fingerprint") != fingerprint({**post, "slot": item["at"]}):
+            raise ValueError("reschedule requires the revised post fingerprint")
+        required(item["approval_evidence"], "owner approval for the revised post and slot")
+    # Older ledgers only need this table when an operator records the first change.
+    db.execute(SCHEDULE_CHANGE_SCHEMA)
+    db.execute("INSERT INTO schedule_changes VALUES (?, ?, ?, ?)",
+               (campaign, post_id, recorded.astimezone(timezone.utc).isoformat(), json_text(item)))
 
 
 def approved(db, plan):
@@ -140,29 +198,40 @@ def approved(db, plan):
 
 def evidence_receipt(db, plan, item, now):
     campaign, post_id, state = plan["id"], item["post"], item["state"]
-    post = next((post for post in plan["posts"] if post["id"] == post_id), None)
-    if post is None or state not in ("scheduled", "published"):
-        raise ValueError("receipt needs a campaign post and a scheduled or published state")
+    post = find_post(plan, post_id)
+    if state not in ("scheduled", "published", "cancelled", "rescheduled"):
+        raise ValueError("unsupported receipt state")
     if not approved(db, plan) or item["fingerprint"] != fingerprint(post):
         raise ValueError("receipt requires approval and the exact post fingerprint")
     provider = required(item["provider"], "provider")
     if item["account"] != plan["account"]:
         raise ValueError("receipt account differs from approved profile")
     external_id = required(item["external_id"], "provider receipt identifier")
-    https_url(item["url"], "receipt URL", linkedin_only=state == "published")
-    event = instant(item["at"])
-    recorded = instant(item["verified_at"])
-    if recorded > now:
-        raise ValueError("receipt verification is in the future")
-    if state == "scheduled" and event != instant(post["slot"]):
-        raise ValueError("verified scheduled instant differs from approved slot")
-    if state == "published" and event > recorded:
-        raise ValueError("published instant is later than its observation")
-    old = load_receipts(db, campaign).get((post_id, state))
+    receipts = load_receipts(db, campaign)
+    old = receipts.get((post_id, state))
     if old is not None:
         if old != item:
             raise ValueError("receipt conflicts with existing verified state")
         return
+    if state == "published":
+        url = https_url(item["url"], "LinkedIn post permalink", linkedin_only=True)
+        parsed = urlsplit(url)
+        if (parsed.username is not None or parsed.port not in (None, 443)
+                or not POST_PATH.fullmatch(unquote(parsed.path))):
+            raise ValueError("invalid LinkedIn post permalink")
+    else:
+        https_url(item["url"], "receipt URL")
+    event = instant(item["at"])
+    recorded = instant(item["verified_at"])
+    if recorded > now:
+        raise ValueError("receipt verification is in the future")
+    if state in ("cancelled", "rescheduled"):
+        record_schedule_change(db, plan, post, item, receipts, recorded)
+        return
+    if state == "scheduled" and event != instant(post["slot"]):
+        raise ValueError("verified scheduled instant differs from approved slot")
+    if state == "published" and event > recorded:
+        raise ValueError("published instant is later than its observation")
     db.execute("INSERT INTO receipts VALUES (?, ?, ?, ?, ?, ?, ?)",
                (campaign, post_id, state, provider, item["account"], external_id, json_text(item)))
 
@@ -223,6 +292,7 @@ def report(db, plan, now):
     campaign = plan["id"]
     approval = approved(db, plan)
     receipts = load_receipts(db, campaign)
+    schedule_changes = load_schedule_changes(db, campaign)
     grouped = defaultdict(list)
     for post_id, provider, raw in db.execute(
         "SELECT post, provider, payload FROM snapshots WHERE campaign = ?", (campaign,)
@@ -233,11 +303,19 @@ def report(db, plan, now):
     for post in plan["posts"]:
         key = post["id"]
         publication = receipts.get((key, "published"))
-        schedule = receipts.get((key, "scheduled"))
-        row = {"id": key, "slot": post["slot"], "fingerprint": fingerprint(post),
+        changes = schedule_changes[key]
+        revision = changes[-1] if changes else receipts.get((key, "scheduled"))
+        cancelled = revision is not None and revision["state"] == "cancelled"
+        schedule = None if cancelled else revision
+        slot = revision["at"] if changes else post["slot"]
+        row = {"id": key, "slot": slot, "fingerprint": fingerprint(post),
                "hook": post["text"].splitlines()[0], "pillar": post["pillar"],
                "discussion": post["discussion"], "status": "draft", "checks": [],
                "scheduled": schedule, "published": publication}
+        if revision:
+            row["schedule_revision"] = fingerprint(revision)
+        if changes:
+            row.update(approved_slot=post["slot"], schedule_changes=changes)
         if publication:
             row["status"] = "published"
             start = instant(publication["at"])
@@ -245,20 +323,34 @@ def report(db, plan, now):
                 due = start + timedelta(hours=hours)
                 end = due + timedelta(hours=grace)
                 observed = {}
+                metric_sources = {}
                 for (post_id, provider), observations in grouped.items():
                     if post_id != key:
                         continue
-                    options = [x for x in observations if due <= instant(x["observed_at"]) <= end]
-                    if options:
-                        nearest = min(options, key=lambda x: instant(x["observed_at"]))
-                        observed[provider] = nearest
-                        scores[label, provider, post["format"], post["angle"]].append(nearest["metrics"])
+                    options = sorted((x for x in observations if due <= instant(x["observed_at"]) <= end),
+                                     key=lambda x: instant(x["observed_at"]))
+                    if not options:
+                        continue
+                    observed[provider] = options[0]
+                    values = {}
+                    sources = {}
+                    for snapshot in options:
+                        for metric, value in snapshot["metrics"].items():
+                            if value is not None and metric not in values:
+                                values[metric] = value
+                                sources[metric] = {"value": value, "observed_at": snapshot["observed_at"],
+                                                   "evidence": snapshot["evidence"]}
+                    metric_sources[provider] = sources
+                    scores[label, provider, post["format"], post["angle"]].append(values)
                 state = ("observed" if observed else "pending" if now < due
                          else "due" if now <= end else "missed")
                 row["checks"].append({"window": label, "state": state, "due_at": due.isoformat(),
-                                      "closes_at": end.isoformat(), "observations": observed})
+                                      "closes_at": end.isoformat(), "observations": observed,
+                                      "metric_sources": metric_sources})
+        elif cancelled:
+            row["status"] = "cancelled"
         elif schedule:
-            row["status"] = "reconcile-publication" if now >= instant(post["slot"]) else "scheduled"
+            row["status"] = "reconcile-publication" if now >= instant(slot) else "scheduled"
         elif approval:
             row["status"] = "missed-slot" if now >= instant(post["slot"]) else "ready-to-schedule"
             if row["status"] == "ready-to-schedule":
@@ -301,6 +393,10 @@ def main():
     approve.add_argument("campaign")
     approve.add_argument("--fingerprint", required=True)
     approve.add_argument("--evidence", required=True)
+    reschedule = sub.add_parser("reschedule-fingerprint", help="hash the exact post and proposed new slot")
+    reschedule.add_argument("campaign")
+    reschedule.add_argument("post")
+    reschedule.add_argument("slot")
     for name in ("receipt", "snapshot", "reply", "reply-close", "decision", "report"):
         cmd = sub.add_parser(name)
         cmd.add_argument("campaign")
@@ -315,7 +411,8 @@ def main():
             db.execute("PRAGMA foreign_keys = ON")
             if args.command == "init":
                 db.executescript(SCHEMA)
-            db.execute("BEGIN" if args.command == "report" else "BEGIN IMMEDIATE")
+            read_only = args.command in ("report", "reschedule-fingerprint")
+            db.execute("BEGIN" if read_only else "BEGIN IMMEDIATE")
             if args.command == "init":
                 plan = json.loads(args.plan.read_text())
                 validate_plan(plan)
@@ -325,6 +422,10 @@ def main():
             plan = load_campaign(db, args.campaign)
             if args.command == "report":
                 print(json.dumps(report(db, plan, now), ensure_ascii=False, indent=2))
+                return
+            if args.command == "reschedule-fingerprint":
+                instant(args.slot)
+                print(fingerprint({**find_post(plan, args.post), "slot": args.slot}))
                 return
             if args.command == "approve":
                 required(args.evidence, "owner approval evidence")
